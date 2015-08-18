@@ -6,7 +6,9 @@ import numpy as np
 ################################################
 
 # Typical column names that aren't sampling parameters
-non_params = ["logpost", "logl", "cycle", "logprior", "loglh1", "logll1", "loglv1", "timestamp", "snrh1", "snrl1", "snrv1", "snr", "time_mean", "time_maxl", "evidence_ratio", "acceptance_rate", "walker"]
+non_params = ["logpost", "deltalogl", "logl", "cycle", "logprior", "loglh1", "logll1", "loglv1",
+              "timestamp", "snrh1", "snrl1", "snrv1", "snr", "time_mean", "time_maxl", "t0",
+              "phase_maxl", "cosalpha", "azimuth", "evidence_ratio", "acceptance_rate", "walker"]
 
 def pass_header(inp):
     """
@@ -14,11 +16,11 @@ def pass_header(inp):
     """
     header = inp.readline().split()
     while True:
-        if len(header) > 0 and header[0] == 'cycle':
+        if len(header) > 0 and header[0].decode('utf-8') == 'cycle':
             break
         header = inp.readline().split()
     inp.readline()
-    return [p.lower() for p in header]
+    return [p.lower().decode('utf-8') for p in header]
 
 def extract_command_line(infile):
     """
@@ -92,9 +94,12 @@ def get_logl(infile):
     """
     Extract the log-likelihood series of the chain.
     """
-    with open(infile, 'r') as inp:
+    with open(infile, 'rb') as inp:
         header = pass_header(inp)
-        logl_col = header.index('logl')
+        try:
+            logl_col = header.index('deltalogl')
+        except ValueError:
+            logl_col = header.index('logl')
         logl = np.genfromtxt(inp, usecols=(logl_col))
     return logl
 
@@ -177,18 +182,18 @@ def consistent_max_logl(infile, max_logl=None, Neff=1000):
     # If 0-noise realization and no marginalizing, peform robust check of max-logl found
     if logl_norm == 0 and check_if_0noise(infile):
         if max_logl_quantile < 0.01 or max_logl_quantile > 0.99:
-            print "WARNING: maximum log-likelihood = {0:.1f}".format(max_logl)
-            print "  is extreme, lying at the {0:.3f} quantile".format(max_logl_quantile)
-            print "  of the expected distribution for an SNR = {0:.1f} injection!".format(injected_snr)
+            print("WARNING: maximum log-likelihood = {0:.1f}".format(max_logl))
+            print("  is extreme, lying at the {0:.3f} quantile".format(max_logl_quantile))
+            print("  of the expected distribution for an SNR = {0:.1f} injection!".format(injected_snr))
             return False
         else:
             return True
 
     else:
         if injected_snr > 0.0 and abs(expected_max_logl - max_logl) > injected_snr:
-            print "WARNING: maximum log-likelihood = {0:.1f}".format(max_logl)
-            print "  is inconsistent with the expected ~{0:.1f}".format(0.5*injected_snr**2)
-            print "  for an SNR = {0:.1f} injection!".format(injected_snr)
+            print("WARNING: maximum log-likelihood = {0:.1f}".format(max_logl))
+            print("  is inconsistent with the expected ~{0:.1f}".format(0.5*injected_snr**2))
+            print("  for an SNR = {0:.1f} injection!".format(injected_snr))
             return False
         else:
             return True
@@ -206,15 +211,18 @@ def extract_independent_samples(infile, max_logl=None, params=None):
     delta_logl = n_dim/2.
     target_logl = max_logl - delta_logl
 
-    with open(infile, 'r') as inp:
+    with open(infile, 'rb') as inp:
         header = pass_header(inp)
 
-        logl_col = header.index('logl')
+        try:
+            logl_col = header.index('deltalogl')
+        except ValueError:
+            logl_col = header.index('logl')
         logl_burnin(inp, logl_col, target_logl)
 
         if params is None:
             param_cols = [col for col, param in enumerate(header) if param not in non_params]
-            params = [header[p] for p in param_cols]
+            params = [str(header[p]) for p in param_cols]
         else:
             param_cols = [header.index(param) for param in params]
 
@@ -257,7 +265,7 @@ def count_dimensions(infile, ignored_params=non_params):
     if not ignored_params:
         ignored_params = []
 
-    with open(infile, 'r') as inp:
+    with open(infile, 'rb') as inp:
         header = pass_header(inp)
 
     if ignored_params:
@@ -280,19 +288,19 @@ def get_event_from_xml(injfile, event):
 ################################################
 ###   Ensemble Utilities   #####################
 ################################################
-def read_ensemble_samples(infiles, params=None, nwalkers=None):
+def read_ensemble_samples(infiles, params=None, nwalkers=None, thin=1):
     # Determine number of walkers
     if nwalkers is None:
         nwalkers = 0
         for infile in infiles:
-            with open(infile, 'r') as inp:
+            with open(infile, 'rb') as inp:
                 header = pass_header(inp)
                 walker_col = header.index('walker')
                 walker_ids = np.genfromtxt(inp, usecols=[walker_col], skip_footer=1)
                 nwalkers += len(np.unique(walker_ids))
 
     if params is None:
-        with open(infiles[0], 'r') as inp:
+        with open(infiles[0], 'rb') as inp:
             header = pass_header(inp)
             param_cols = [col for col, p in enumerate(header) if p not in non_params]
             params = [header[p] for p in param_cols]
@@ -305,21 +313,21 @@ def read_ensemble_samples(infiles, params=None, nwalkers=None):
     acc_T = None
     pos_T = None
     for infile in infiles:
-        with open(infile, 'r') as inp:
+        with open(infile, 'rb') as inp:
             header = pass_header(inp)
             cols = [header.index('walker')]
             [cols.append(header.index(p)) for p in params]
             pos = np.genfromtxt(inp, usecols=cols, skip_footer=1)
 
             if pos_T is None:
-                nframes = sum(pos[:, 0] == pos[0, 0])
+                nframes = np.count_nonzero(pos[:, 0] == pos[0, 0])
                 pos_T = np.zeros((nframes, nwalkers, nparams))
 
             for walker in np.unique(pos[:, 0]):
-                nframes = min(nframes, sum(pos[:, 0] == walker))
+                nframes = min(nframes, np.count_nonzero(pos[:, 0] == walker))
                 pos_T[:nframes, walker] = pos[pos[:, 0] == walker][:nframes, 1:]
 
-    pos_T = pos_T[:nframes, :, :]
+    pos_T = pos_T[:nframes:thin, :, :]
 
     return pos_T, params
 
@@ -446,6 +454,44 @@ def make_triangle(sample_array, params, injdict=None):
 
     return fig
 
+def plot_skymap(output, skypost, pixresol=np.pi/180.0, nest=True):
+    from matplotlib import pyplot as plt
+    import healpy as hp
+    try:
+        from lalinference.cmap import cylon as cmap
+    except ImportError:
+        cmap = plt.cmap('gray')
+
+    cmap.set_under(color='w')
+
+    nside = 1
+    while hp.nside2resol(nside) > pixresol:
+        nside *= 2
+
+    thetas, phis = hp.pix2ang(nside, np.arange(hp.nside2npix(nside), dtype=np.int), nest=nest)
+    pixels = np.column_stack((phis, np.pi/2.0 - thetas))
+
+    pix_post = skypost.posterior(pixels)
+
+    plt.clf()
+    hp.mollview(pix_post, cmap=cmap, title="", nest=nest)
+    plt.savefig(output)
+
+def make_skymap(pts, maxpts=None, trials=50, outname='skymap.png'):
+    from sky_area import sky_area_clustering as sac
+    if maxpts is not None:
+        pts = np.random.permutation(pts)[:maxpts, :]
+
+    for i in range(50):
+        try:
+            skypost = sac.ClusteredSkyKDEPosterior(pts)
+            break
+        except:
+            skypost = None
+            continue
+    plot_skymap(outname, skypost)
+
+
 def add_logl_plot(fig, logls, SNR=0.0, dim=None, nskip=100, logl_norm=0.0, burned_in=None):
     """
     Add a plot of the log-likelihood series from each chain
@@ -538,6 +584,7 @@ def plot_label(param):
         'phi_jl':r'$\phi_\mathrm{JL}\,(\mathrm{rad})$',
         'phi12':r'$\phi_\mathrm{12}\,(\mathrm{rad})$',
         'logl':r'$\mathrm{log}(\mathcal{L})$',
+        'deltalogl':r'$\Delta\mathrm{log}(\mathcal{L})$',
         'h1_end_time':r'$t_\mathrm{H}$',
         'l1_end_time':r'$t_\mathrm{L}$',
         'v1_end_time':r'$t_\mathrm{V}$',
@@ -586,7 +633,7 @@ def plot_label(param):
 ###   Autocorrelation Calculation   ############
 ################################################
 
-class ACLError(StandardError):
+class ACLError(Exception):
     def __init__(self, *args):
         super(ACLError, self).__init__(*args)
 
@@ -661,7 +708,7 @@ def autocorrelation_length_estimate(series, acf=None, M=5, K=2):
 ################################################
 
 def extract_inj_vals(sim_inspiral_event, f_ref=100):
-    a1, a2, spin1z, spin2z, theta_jn, phi_jl, tilt1, tilt2, phi12 = calculate_injected_sys_frame_params(sim_inspiral_event, f_ref)
+    a1, a2, spin1z, spin2z, theta_jn, phi_jl, tilt1, tilt2, phi12, beta = calculate_injected_sys_frame_params(sim_inspiral_event, f_ref)
     injvals={
         'mc'          : sim_inspiral_event.mchirp,
         'q'           : sim_inspiral_event.mass2/sim_inspiral_event.mass1,
@@ -686,6 +733,8 @@ def extract_inj_vals(sim_inspiral_event, f_ref=100):
         'costilt2'    : np.cos(tilt2),
         'theta_jn'    : theta_jn,
         'costheta_jn' : np.cos(theta_jn),
+        'beta'        : beta,
+        'cosbeta'     : np.cos(beta),
         'phi12'       : phi12,
         'phi_jl'      : phi_jl}
     return injvals
@@ -760,7 +809,9 @@ def calculate_injected_sys_frame_params(sim_inspiral_event, f_ref=100.0):
     else:
         phi12 = phi2 - phi1
 
-    return a1, a2, spin1z, spin2z, theta_jn, phi_jl, tilt1, tilt2, phi12
+    beta  = array_ang_sep(J, L)
+
+    return a1, a2, spin1z, spin2z, theta_jn, phi_jl, tilt1, tilt2, phi12, beta
 
 def ROTATEZ(angle, vx, vy, vz):
     # This is the ROTATEZ in LALSimInspiral.c.
@@ -822,8 +873,8 @@ def orbital_momentum(fref, mc, inclination):
     Note that if one wants to build J=L+S1+S2 with L returned by this function, S1 and S2
     must not get the Msun^2 factor.
     """
-    from pylal import lalconstants
-    Lmag = np.power(mc, 5.0/3.0) / np.power(np.pi * lalconstants.LAL_MTSUN_SI * fref, 1.0/3.0)
+    from lal import MTSUN_SI
+    Lmag = np.power(mc, 5.0/3.0) / np.power(np.pi * MTSUN_SI * fref, 1.0/3.0)
     Lx, Ly, Lz = sph2cart(Lmag, inclination, 0.0)
     return np.hstack((Lx,Ly,Lz))
 
@@ -858,18 +909,19 @@ if __name__ == '__main__':
         #sample_array = np.vstack(thin_ensemble(sample_array, params))
         sample_array = np.vstack(sample_array)
 
-    except RuntimeError:
+    except (RuntimeError, ValueError):
         for infile in args.samples:
             logl = get_logl(infile)
             max_logl = logl.max()
             logls.append(logl)
 
-            try:
-                samples, params = extract_independent_samples(infile, params=args.param)
-            except TypeError, IndexError:
-                continue
+            #try:
+            samples, params = extract_independent_samples(infile, params=args.param)
+            #except (TypeError, IndexError):
+            #    print "continue"
+            #    continue
 
-            print "{} independent samples collected from {}.".format(len(samples), infile)
+            print("{} independent samples collected from {}.".format(len(samples), infile))
 
             # Check that max logl is consistent with the injected network SNR
             burned_in = consistent_max_logl(infile, max_logl, Neff=len(samples))
@@ -898,12 +950,16 @@ if __name__ == '__main__':
         try:
             approx = get_approx(infile)
             outname = generate_default_output_filename(approx=approx, event=event)
-        except ImportError:
+        except (ImportError, ValueError):
             outname = "posterior.png"
 
     fig = make_triangle(sample_array, params, injdict = injvals)
     add_logl_plot(fig, logls, SNR=get_network_snr(infile), dim=len(params), logl_norm=norm, burned_in=burned_in)
     fig.savefig(outname)
+
+    skypts = np.column_stack([sample_array[:, params.index('ra')],
+                              sample_array[:, params.index('dec')]])
+    make_skymap(skypts)
 
     with open('posterior_samples.dat', 'w') as outp:
         outp.write(' '.join(params)+'\n')
